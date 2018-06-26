@@ -1,0 +1,122 @@
+/*
+ * XIOTembeddedtask.c
+ *
+ * Created: 25/06/2018 08:44:42 م
+ * Author : Mitry
+ */ 
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+#include <string.h>
+/******MACROS******/
+#define SET_BIT(ADD,BIT) ADD|=(1<<BIT)
+#define RESET_BIT(ADD,BIT) ADD&=(~1<<BIT)
+#define READ_BIT(ADD,BIT) ADD&=(1<<BIT)
+#define TOGGLE_BIT(ADD,BIT) ADD^=(1<<BIT)
+/******used pins define******/
+#define F_CPU 8000000
+#define BUAD 9600
+#define BRC ((F_CPU)/(BUAD*16UL)-1)
+#define TX_BUFFER_SIZE 128
+#define inPin PD2 //interrupt pin to read from the switch
+#define outPin PD4 //output Pin to set the led 
+#define sensorPin PINC0 // temperature sensor pin
+
+/*****Function PROTOTYPES*****/
+void appendSerial(char c);
+void serialWrite(char c[]);
+void adc_init();
+unsigned int readTemp(unsigned char ch);
+
+/****SOME VARIABLES USED FOR SERIAL COMM.****/
+char serialBuffer[TX_BUFFER_SIZE];
+uint8_t serialReadPos = 0;
+uint8_t serialWritePos = 0;
+
+
+int main(void)
+{
+	unsigned int Temperature = 0;//ADC write data in this variable as a return from readTemp() 
+	char c[10];
+	/*First point in XIOTembeddedtask Code*/
+	RESET_BIT(DDRD,inPin); //set inPin as input
+	SET_BIT(PORTD,inPin); //enabling pull-up resistor
+	SET_BIT(DDRD,outPin); //set outPin as output
+	SET_BIT(EICRA,ISC01); //set Control INT Register to falling edge triggering
+	SET_BIT(EIMSK,INT0); //set INT0 in Mask Register to accept interrupts	
+	/*USART INIT*/
+	UBRR0H = (BRC>>8);
+	UBRR0L =  BRC;
+	UCSR0B = (1<<TXEN0)|(1<<TXCIE0);
+	UCSR0C = (1<<UCSZ01)|(1<<UCSZ00);
+	/***********/
+	adc_init();
+	sei();
+    while (1) 
+    {
+		Temperature = (readTemp(sensorPin)/2); //the result of temperature is only valid calculation for LM35 temp. sensor according to its data sheet formula of temperature
+		serialWrite("T= ");
+		itoa(Temperature,c,2); //itoa() converts int to string
+		serialWrite(c);
+		_delay_ms(3000); //wait 3seconds to next reading
+    }
+}
+
+
+/*FUNCTION INPUT IS AN INTERRUPT AND OUTPUT IS TOGGLED outPin (LED) and SERIAL WRITE STATE*/
+ISR(INT0_vect){
+	serialWrite("Pressed");
+	TOGGLE_BIT(PORTD,outPin); //Toggle outPin
+	serialWrite("\n State= ");
+	if(READ_BIT(PORTD,outPin)){serialWrite("ON");}
+	else{serialWrite("OFF");}
+}
+
+/*THIS FUNCTION WRITE SERIAL TX DATA TO USART REGISTER*/
+void appendSerial(char c){
+	serialBuffer[serialWritePos] = c;
+	serialWritePos++;
+	if(serialWritePos >= TX_BUFFER_SIZE)
+	{
+		serialWritePos = 0;
+	}
+}
+
+void serialWrite(char c[]){
+	for(uint8_t i = 0; i < strlen(c); i++)
+	{
+		appendSerial(c[i]);
+	}
+	if(UCSR0A & (1 << UDRE0))
+	{
+		UDR0 = 0;
+	}
+}
+
+void adc_init(){
+	// AREF = Avcc.. Internal
+	ADMUX = (1<<REFS0);
+	ADCSRA = (1<<ADEN)| (1<<ADPS1)|(1<<ADPS0);
+}
+
+unsigned int readTemp(unsigned char ch){// select the corresponding channel 0~7
+	ADMUX |= ch;// start single conversion, by writing ’1′ to ADSC
+	ADCSRA |= (1<<ADSC);// wait for conversion to complete, ADSC becomes ’0′ again, till then, run loop continuously
+	while(ADCSRA & (1<<ADSC));
+	return ADC;
+}
+
+
+
+ISR(USART_TX_vect){
+	if(serialReadPos != serialWritePos)
+	{
+		UDR0 = serialBuffer[serialReadPos];
+		serialReadPos++;
+		if(serialReadPos >= TX_BUFFER_SIZE)
+		{
+			serialReadPos++;
+		}
+	}
+}
